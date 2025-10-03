@@ -74,6 +74,9 @@ class BootstrapVisualizer:
             colorbar=dict(title="Value")
         ))
 
+        # Reverse y-axis so oldest years are at top (ascending order going down)
+        fig.update_yaxes(autorange="reversed")
+
         # Add highlighted cells overlay
         if highlighted_cells:
             for origin, dev in highlighted_cells:
@@ -89,6 +92,7 @@ class BootstrapVisualizer:
             title=dict(text=title, x=0.5, xanchor='center'),
             xaxis_title="Development Period",
             yaxis_title="Accident Year",
+            xaxis=dict(side='top'),  # Put x-axis labels on top
             height=400,
             template='plotly_white',
             font=dict(size=11)
@@ -285,6 +289,9 @@ class BootstrapVisualizer:
             hovertemplate='Origin: %{y}<br>Development: %{x}<br>Value: %{z:.0f}<extra></extra>'
         ))
 
+        # Reverse y-axis so oldest years are at top
+        fig.update_yaxes(autorange="reversed")
+
         # Highlight current cell
         fig.add_shape(
             type="rect",
@@ -327,6 +334,7 @@ class BootstrapVisualizer:
             ),
             xaxis_title="Development Period",
             yaxis_title="Accident Year",
+            xaxis=dict(side='top'),  # Put x-axis labels on top
             height=500,
             template='plotly_white',
             font=dict(size=11)

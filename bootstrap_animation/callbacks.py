@@ -249,6 +249,57 @@ def register_callbacks(app, bootstrap_engine, visualizer):
 
     @app.callback(
         [
+            Output('triangle-mode-store', 'data'),
+            Output('btn-cumulative', 'color'),
+            Output('btn-incremental', 'color'),
+        ],
+        [
+            Input('btn-cumulative', 'n_clicks'),
+            Input('btn-incremental', 'n_clicks'),
+        ],
+        [State('triangle-mode-store', 'data')],
+        prevent_initial_call=True
+    )
+    def toggle_triangle_mode(cum_clicks, incr_clicks, current_mode):
+        """Toggle between cumulative and incremental triangle display."""
+        triggered_id = ctx.triggered_id
+
+        if triggered_id == 'btn-cumulative':
+            return 'cumulative', 'primary', 'secondary'
+        elif triggered_id == 'btn-incremental':
+            return 'incremental', 'secondary', 'primary'
+
+        # Default
+        return current_mode, 'primary' if current_mode == 'cumulative' else 'secondary', 'primary' if current_mode == 'incremental' else 'secondary'
+
+    @app.callback(
+        Output('actual-triangle-graph', 'figure'),
+        [Input('triangle-mode-store', 'data')],
+        prevent_initial_call=False
+    )
+    def update_actual_triangle(mode):
+        """Update actual triangle display based on mode."""
+        if mode == 'cumulative':
+            # Get cumulative triangle
+            cumulative_data = bootstrap_engine.triangle.values[0, 0]
+            fig = visualizer.create_triangle_heatmap(
+                cumulative_data,
+                "Actual Loss Triangle (Cumulative)",
+                colorscale='Greens'
+            )
+        else:
+            # Get incremental triangle
+            incremental_data = bootstrap_engine.actual_incremental.values[0, 0]
+            fig = visualizer.create_triangle_heatmap(
+                incremental_data,
+                "Actual Loss Triangle (Incremental)",
+                colorscale='Greens'
+            )
+
+        return fig
+
+    @app.callback(
+        [
             Output('original-triangle-graph', 'figure'),
             Output('residual-triangle-graph', 'figure'),
         ],
@@ -256,13 +307,13 @@ def register_callbacks(app, bootstrap_engine, visualizer):
         prevent_initial_call=False
     )
     def update_static_triangles(n):
-        """Update static triangle displays (original and residuals)."""
+        """Update static triangle displays (fitted and residuals)."""
         metadata = bootstrap_engine.get_triangle_metadata()
 
-        # Original triangle
-        original_fig = visualizer.create_triangle_heatmap(
-            metadata['actual_incremental'],
-            "Original Incremental Triangle",
+        # Fitted triangle (expected values from model)
+        fitted_fig = visualizer.create_triangle_heatmap(
+            metadata['fitted_incremental'],
+            "Fitted Incremental Triangle (Model Expected Values)",
             colorscale='Blues'
         )
 
@@ -273,4 +324,4 @@ def register_callbacks(app, bootstrap_engine, visualizer):
             colorscale='RdBu'
         )
 
-        return original_fig, residual_fig
+        return fitted_fig, residual_fig

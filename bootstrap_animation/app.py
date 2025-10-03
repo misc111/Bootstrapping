@@ -194,6 +194,28 @@ app.layout = dbc.Container([
         ], width=6)
     ], className="mb-3"),
 
+    # Actual Data Triangle Section
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Div([
+                        html.H6("Actual Loss Triangle", className="mb-0 d-inline"),
+                        html.Div([
+                            dbc.ButtonGroup([
+                                dbc.Button("Cumulative", id='btn-cumulative', color="primary", size="sm", className="me-1"),
+                                dbc.Button("Incremental", id='btn-incremental', color="secondary", size="sm")
+                            ], size="sm", className="float-end")
+                        ], className="d-inline float-end")
+                    ], className="d-flex justify-content-between align-items-center")
+                ]),
+                dbc.CardBody([
+                    dcc.Graph(id='actual-triangle-graph', config={'displayModeBar': False})
+                ])
+            ])
+        ])
+    ], className="mb-3"),
+
     # Reference triangles (collapsible)
     dbc.Row([
         dbc.Col([
@@ -207,10 +229,13 @@ app.layout = dbc.Container([
                             dcc.Graph(id='residual-triangle-graph', config={'displayModeBar': False})
                         ], width=6)
                     ])
-                ], title="View Original Triangle & Residuals")
+                ], title="View Fitted Values & Residuals")
             ])
         ])
     ], className="mb-3"),
+
+    # Store for triangle display mode
+    dcc.Store(id='triangle-mode-store', data='cumulative'),
 
     # Hidden components for state management
     dcc.Store(id='iteration-store', data={
