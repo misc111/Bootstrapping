@@ -101,15 +101,34 @@ def register_callbacks(app, bootstrap_engine, visualizer):
     def update_interval_speed(speed_value):
         """
         Update animation speed based on slider.
-        Speed slider: 0.1x to 10x (logarithmic)
+        Speed slider: 0.1x to 10x
         Interval: milliseconds per frame
+
+        At high speeds, we need much higher minimum intervals because:
+        - Creating 4 Plotly figures per update is expensive
+        - Dash state management adds overhead
+        - Browser needs time to render and respond
         """
-        # Base interval: 100ms per frame
-        base_interval = 100
-        # Convert slider value to multiplier
-        # Slider is logarithmic: 0.1, 0.2, ..., 1, 2, ..., 10
+        # Base interval: 300ms per frame at 1x speed (increased from 200ms)
+        base_interval = 300
+
+        # Calculate interval based on speed
         interval = int(base_interval / speed_value)
-        return max(10, interval)  # Minimum 10ms
+
+        # Set aggressive minimums to prevent overwhelming the browser
+        # These minimums account for the cost of creating multiple Plotly figures
+        if speed_value >= 7:
+            min_interval = 100  # At 7-10x, minimum 100ms (10 fps max)
+        elif speed_value >= 5:
+            min_interval = 80   # At 5-7x, minimum 80ms (12.5 fps max)
+        elif speed_value >= 3:
+            min_interval = 60   # At 3-5x, minimum 60ms (16.7 fps max)
+        elif speed_value >= 2:
+            min_interval = 50   # At 2-3x, minimum 50ms (20 fps max)
+        else:
+            min_interval = 40   # Below 2x, minimum 40ms (25 fps max)
+
+        return max(min_interval, interval)
 
     @app.callback(
         [
@@ -206,7 +225,10 @@ def register_callbacks(app, bootstrap_engine, visualizer):
             main_fig = visualizer.create_triangle_heatmap(
                 iteration_detail['bootstrap_incremental'],
                 f"Bootstrap Triangle - Iteration {current_iteration + 1}",
-                colorscale='Purples'
+                colorscale='Purples',
+                value_divisor=1000,
+                colorbar_title="$000s",
+                hover_suffix=" ($000s)"
             )
 
             residual_fig = visualizer.create_residual_pool_scatter(
@@ -285,7 +307,10 @@ def register_callbacks(app, bootstrap_engine, visualizer):
             fig = visualizer.create_triangle_heatmap(
                 cumulative_data,
                 "Actual Loss Triangle (Cumulative)",
-                colorscale='Greens'
+                colorscale='Greens',
+                value_divisor=1000,
+                colorbar_title="$000s",
+                hover_suffix=" ($000s)"
             )
         else:
             # Get incremental triangle
@@ -293,7 +318,10 @@ def register_callbacks(app, bootstrap_engine, visualizer):
             fig = visualizer.create_triangle_heatmap(
                 incremental_data,
                 "Actual Loss Triangle (Incremental)",
-                colorscale='Greens'
+                colorscale='Greens',
+                value_divisor=1000,
+                colorbar_title="$000s",
+                hover_suffix=" ($000s)"
             )
 
         return fig
@@ -314,14 +342,20 @@ def register_callbacks(app, bootstrap_engine, visualizer):
         fitted_fig = visualizer.create_triangle_heatmap(
             metadata['fitted_incremental'],
             "Fitted Incremental Triangle (Model Expected Values)",
-            colorscale='Blues'
+            colorscale='Blues',
+            value_divisor=1000,
+            colorbar_title="$000s",
+            hover_suffix=" ($000s)"
         )
 
         # Residual triangle
         residual_fig = visualizer.create_triangle_heatmap(
             metadata['residuals'],
             "Pearson Residuals",
-            colorscale='RdBu'
+            colorscale='RdBu',
+            text_format="{:,.2f}",
+            hover_format="{:,.2f}",
+            colorbar_title="Residual"
         )
 
         return fitted_fig, residual_fig

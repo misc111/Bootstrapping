@@ -33,7 +33,12 @@ class BootstrapVisualizer:
         data: np.ndarray,
         title: str,
         highlighted_cells: Optional[List[Tuple[int, int]]] = None,
-        colorscale: str = 'Blues'
+        colorscale: str = 'Blues',
+        value_divisor: float = 1.0,
+        text_format: str = "{:,.0f}",
+        hover_format: str = "{:,.0f}",
+        colorbar_title: str = "Value",
+        hover_suffix: str = ""
     ) -> go.Figure:
         """
         Create a heatmap visualization of a triangle.
@@ -54,24 +59,44 @@ class BootstrapVisualizer:
         go.Figure
         """
         # Mask lower triangle (future periods)
-        masked_data = data.copy()
+        masked_data = np.array(data, dtype=float, copy=True)
         for i in range(self.n_origin):
             for j in range(self.n_dev):
                 if i + j >= self.n_origin:
                     masked_data[i, j] = np.nan
 
+        divisor = value_divisor if value_divisor not in (0, None) else 1.0
+        scaled_data = masked_data / divisor
+
+        text_data = np.empty(scaled_data.shape, dtype=object)
+        hover_data = np.empty(scaled_data.shape, dtype=object)
+        for i in range(self.n_origin):
+            for j in range(self.n_dev):
+                if np.isnan(scaled_data[i, j]):
+                    text_data[i, j] = ''
+                    hover_data[i, j] = ''
+                else:
+                    text_data[i, j] = text_format.format(scaled_data[i, j])
+                    hover_value = hover_format.format(scaled_data[i, j])
+                    hover_data[i, j] = f"{hover_value}{hover_suffix}"
+
+        colorbar_title_to_use = colorbar_title
+        if colorbar_title == "Value" and value_divisor == 1000:
+            colorbar_title_to_use = "$000s"
+
         # Create base heatmap
         fig = go.Figure(data=go.Heatmap(
-            z=masked_data,
+            z=scaled_data,
             x=self.dev_labels,
             y=self.origin_labels,
             colorscale=colorscale,
-            text=np.round(masked_data, 0),
+            text=text_data,
+            customdata=hover_data,
             texttemplate='%{text}',
             textfont={"size": 10},
-            hovertemplate='Origin: %{y}<br>Development: %{x}<br>Value: %{z:.0f}<extra></extra>',
+            hovertemplate='Origin: %{y}<br>Development: %{x}<br>Value: %{customdata}<extra></extra>',
             showscale=True,
-            colorbar=dict(title="Value")
+            colorbar=dict(title=colorbar_title_to_use)
         ))
 
         # Reverse y-axis so oldest years are at top (ascending order going down)
@@ -140,7 +165,7 @@ class BootstrapVisualizer:
                 opacity=0.6,
                 line=dict(width=1, color='white')
             ),
-            text=[f"Origin {r['origin']}, Dev {r['dev']}<br>Residual: {r['adjusted_residual']:.3f}"
+            text=[f"Origin {r['origin']}, Dev {r['dev']}<br>Residual: {r['adjusted_residual']:.2f}"
                   for r in residual_pool],
             hovertemplate='%{text}<extra></extra>'
         ))
@@ -277,16 +302,32 @@ class BootstrapVisualizer:
                     partial_triangle[i, j] = np.nan
 
         # Create heatmap with current cell highlighted
+        divisor = 1000.0
+        scaled_triangle = partial_triangle / divisor
+
+        text_data = np.empty(scaled_triangle.shape, dtype=object)
+        hover_data = np.empty(scaled_triangle.shape, dtype=object)
+        for i in range(self.n_origin):
+            for j in range(self.n_dev):
+                if np.isnan(scaled_triangle[i, j]):
+                    text_data[i, j] = ''
+                    hover_data[i, j] = ''
+                else:
+                    text_data[i, j] = f"{scaled_triangle[i, j]:,.0f}"
+                    hover_data[i, j] = f"{scaled_triangle[i, j]:,.0f} ($000s)"
+
         fig = go.Figure(data=go.Heatmap(
-            z=partial_triangle,
+            z=scaled_triangle,
             x=self.dev_labels,
             y=self.origin_labels,
             colorscale='Purples',
-            text=np.round(partial_triangle, 0),
+            text=text_data,
             texttemplate='%{text}',
             textfont={"size": 10},
             showscale=True,
-            hovertemplate='Origin: %{y}<br>Development: %{x}<br>Value: %{z:.0f}<extra></extra>'
+            customdata=hover_data,
+            hovertemplate='Origin: %{y}<br>Development: %{x}<br>Value: %{customdata}<extra></extra>',
+            colorbar=dict(title="$000s")
         ))
 
         # Reverse y-axis so oldest years are at top
@@ -304,12 +345,14 @@ class BootstrapVisualizer:
         )
 
         # Add annotation for current sample
+        format_thousands = lambda value: f"{value / 1000:,.0f}"
+
         annotation_text = (
             f"Cell ({current_sample['origin']}, {current_sample['dev']})<br>"
-            f"Fitted: {current_sample['fitted']:.0f}<br>"
-            f"Residual: {current_sample['sampled_residual']:.3f}<br>"
+            f"Fitted: {format_thousands(current_sample['fitted'])} ($000s)<br>"
+            f"Residual: {current_sample['sampled_residual']:.2f}<br>"
             f"Sampled from: ({current_sample['sampled_from_origin']}, {current_sample['sampled_from_dev']})<br>"
-            f"Bootstrap: {current_sample['bootstrap_value']:.0f}"
+            f"Bootstrap: {format_thousands(current_sample['bootstrap_value'])} ($000s)"
         )
 
         fig.add_annotation(
