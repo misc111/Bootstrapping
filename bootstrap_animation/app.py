@@ -45,17 +45,40 @@ app.layout = dbc.Container([
         ])
     ]),
 
-    # Information Panel
+    # Dataset Selection and Information Panel
     dbc.Row([
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.P([
-                        html.Strong("Dataset: "),
-                        f"{metadata['n_origin']} accident years × {metadata['n_dev']} development periods | ",
-                        html.Strong("Base Reserve (Chain Ladder): "),
-                        f"${metadata['base_reserve']:,.0f}"
-                    ], className="mb-0")
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Dataset:", className="mb-1"),
+                            dcc.Dropdown(
+                                id='dataset-dropdown',
+                                options=[
+                                    {'label': 'GenIns (General Insurance)', 'value': 'genins'},
+                                    {'label': 'RAA (Reinsurance Association of America)', 'value': 'raa'},
+                                    {'label': 'ABC', 'value': 'abc'},
+                                    {'label': 'Quarterly', 'value': 'quarterly'},
+                                    {'label': 'UK Motor', 'value': 'ukmotor'},
+                                    {'label': 'MW2008 (Medicare)', 'value': 'mw2008'},
+                                    {'label': 'MW2014 (Medicare)', 'value': 'mw2014'},
+                                ],
+                                value='genins',
+                                clearable=False
+                            )
+                        ], width=3),
+                        dbc.Col([
+                            html.Div(id='dataset-info', children=[
+                                html.P([
+                                    html.Strong("Size: "),
+                                    f"{metadata['n_origin']} accident years × {metadata['n_dev']} development periods | ",
+                                    html.Strong("Base Reserve: "),
+                                    f"${metadata['base_reserve']:,.0f}"
+                                ], className="mb-0", style={'marginTop': '8px'})
+                            ])
+                        ], width=9)
+                    ])
                 ])
             ], color="light")
         ])
@@ -136,6 +159,13 @@ app.layout = dbc.Container([
                                 "Reset",
                                 id='reset-button',
                                 color="danger",
+                                className="me-2",
+                                size="lg"
+                            ),
+                            dbc.Button(
+                                "Run All",
+                                id='run-all-button',
+                                color="info",
                                 size="lg"
                             ),
                         ])
@@ -162,7 +192,10 @@ app.layout = dbc.Container([
         # Left column: Main triangle and residual pool
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader(html.H6("Bootstrap Triangle (Sampling Animation)", className="mb-0")),
+                dbc.CardHeader(html.H6([
+                    "Bootstrap Triangle (Sampling Animation): ",
+                    html.I("q*(w,d) = m(w,d) + sqrt(m(w,d)) × r*")
+                ], className="mb-0")),
                 dbc.CardBody([
                     dcc.Graph(id='main-triangle-graph', config={'displayModeBar': False})
                 ])
@@ -211,6 +244,18 @@ app.layout = dbc.Container([
                 ]),
                 dbc.CardBody([
                     dcc.Graph(id='actual-triangle-graph', config={'displayModeBar': False})
+                ])
+            ])
+        ])
+    ], className="mb-3"),
+
+    # Development Factors Section
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader(html.H6("Development Factors", className="mb-0")),
+                dbc.CardBody([
+                    html.Div(id='dev-factors-display')
                 ])
             ])
         ])

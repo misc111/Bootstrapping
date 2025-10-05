@@ -38,20 +38,38 @@ class AnimatedBootstrapODP:
 
         # Fit base chain ladder model
         self.base_model = cl.Chainladder().fit(self.triangle)
-        self.fitted_values = self.base_model.full_triangle_
 
-        # Get expected values (fitted from GLM) for residual calculation
-        # full_expectation_ gives the model's expected values, not just filled historicals
-        expected_values = self.base_model.full_expectation_
+        # Get LDFs from base model
+        base_ldfs = self.base_model.ldf_.values[0, 0, 0, :]
 
-        # Calculate incremental triangles
+        # Build fitted cumulative triangle by back-filling using LDFs
+        # Start with the latest diagonal and divide by LDFs to fill in the historical triangle
+        fitted_cumulative = np.zeros_like(self.triangle.values[0, 0])
+        latest_diag = self.triangle.latest_diagonal.values[0, 0, :, 0]
+        n_origin, n_dev = fitted_cumulative.shape
+
+        # Fill the fitted triangle
+        for i in range(n_origin):
+            # Start with the latest diagonal value
+            latest_dev_idx = n_origin - i - 1  # Last observed development period for this origin
+            if latest_dev_idx < n_dev:
+                fitted_cumulative[i, latest_dev_idx] = latest_diag[i]
+
+                # Back-fill by dividing by LDFs
+                for j in range(latest_dev_idx - 1, -1, -1):
+                    if j < len(base_ldfs) and base_ldfs[j] > 0:
+                        fitted_cumulative[i, j] = fitted_cumulative[i, j + 1] / base_ldfs[j]
+                    else:
+                        fitted_cumulative[i, j] = fitted_cumulative[i, j + 1]
+
+        # Convert to incremental
         self.actual_incremental = self.triangle.cum_to_incr()
-        fitted_incremental_full = expected_values.cum_to_incr()
+        fitted_incremental = np.diff(fitted_cumulative, axis=1, prepend=0)
 
-        # Slice fitted incremental to match original triangle dimensions
-        # (fitted may have extra development periods from projection)
-        n_dev_orig = self.actual_incremental.shape[3]
-        self.fitted_incremental = fitted_incremental_full.iloc[:, :, :, :n_dev_orig]
+        # Store as Triangle object for consistency
+        fitted_tri = self.triangle.copy()
+        fitted_tri.values = fitted_incremental.reshape(1, 1, *fitted_incremental.shape)
+        self.fitted_incremental = fitted_tri
 
         # Calculate Pearson residuals
         self._calculate_residuals()
@@ -122,7 +140,7 @@ class AnimatedBootstrapODP:
         bootstrap_incremental = np.zeros((n_origin, n_dev))
         fitted = self.fitted_incremental.values[0, 0]
 
-        # Sample residuals and generate bootstrap values
+        # Sample residuals and generate bootstrap values for HISTORICAL triangle only
         for i in range(n_origin):
             for j in range(n_dev):
                 if i + j < n_origin and fitted[i, j] > 0:
@@ -148,14 +166,14 @@ class AnimatedBootstrapODP:
                         'sequence': len(sampling_details)
                     })
 
-        # Convert to cumulative and create triangle
+        # Convert to cumulative
         bootstrap_cumulative = np.cumsum(bootstrap_incremental, axis=1)
 
-        # Create chainladder Triangle object by copying structure
+        # Create chainladder Triangle object from bootstrap historical data
         bootstrap_tri = self.triangle.copy()
         bootstrap_tri.values = bootstrap_cumulative.reshape(1, 1, *bootstrap_cumulative.shape)
 
-        # Fit chain ladder and calculate reserve
+        # Fit NEW chain ladder model to bootstrap triangle and project to ultimate
         bootstrap_model = cl.Chainladder().fit(bootstrap_tri)
         ultimate = bootstrap_model.ultimate_.values[0, 0, :, -1]
         latest = bootstrap_tri.latest_diagonal.values[0, 0, :, 0]
