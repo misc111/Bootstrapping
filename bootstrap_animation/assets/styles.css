@@ -267,3 +267,15 @@ hr {
 ::-webkit-scrollbar-thumb:hover {
     background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
 }
+
+/* Ensure dataset selector stays above other controls */
+#dataset-dropdown {
+    position: relative;
+    z-index: 2000;
+}
+
+#dataset-dropdown .Select-menu-outer,
+#dataset-dropdown .Select-menu,
+#dataset-dropdown .dash-dropdown__menu {
+    z-index: 2100 !important;
+}

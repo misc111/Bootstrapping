@@ -65,7 +65,8 @@ app.layout = dbc.Container([
                                     {'label': 'MW2014 (Medicare)', 'value': 'mw2014'},
                                 ],
                                 value='genins',
-                                clearable=False
+                                clearable=False,
+                                style={'position': 'relative', 'zIndex': 1200}
                             )
                         ], width=3),
                         dbc.Col([

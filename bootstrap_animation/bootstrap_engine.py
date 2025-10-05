@@ -51,7 +51,9 @@ class AnimatedBootstrapODP:
         self.iteration_details = []
         self.reserve_estimates = []
         self.scale_parameter = None
-        self.residual_pool = []  # For compatibility with visualization
+        self.residual_pool = []  # Populated via residual preparation
+        self._residual_adjusted_values = np.array([])
+        self._prepare_residual_pool()
 
     def _calculate_base_reserve(self) -> float:
         """Calculate base reserve estimate from chain ladder."""
@@ -72,20 +74,77 @@ class AnimatedBootstrapODP:
             'actual_incremental': self.actual_incremental.values[0, 0],
             'fitted_incremental': self.fitted_incremental.values[0, 0],
             'residuals': self._get_residuals(),
+            'residual_pool': self.residual_pool,
             'origin_labels': [str(x) for x in self.triangle.origin.values],
             'development_labels': [str(x) for x in self.triangle.development.values]
         }
 
-    def _get_residuals(self):
-        """Calculate Pearson residuals for display."""
+    def _prepare_residual_pool(self) -> None:
+        """Prepare residual pool and related helpers for visualization."""
         actual = self.actual_incremental.values[0, 0]
         fitted = self.fitted_incremental.values[0, 0]
 
         with np.errstate(divide='ignore', invalid='ignore'):
-            residuals = (actual - fitted) / np.sqrt(fitted)
-            residuals = np.nan_to_num(residuals, nan=0.0, posinf=0.0, neginf=0.0)
+            standardized_residuals = (actual - fitted) / np.sqrt(np.abs(fitted))
+            standardized_residuals = np.nan_to_num(
+                standardized_residuals, nan=0.0, posinf=0.0, neginf=0.0
+            )
 
-        return residuals
+        self.unscaled_residuals = standardized_residuals
+
+        n_origin, n_dev = standardized_residuals.shape
+        residual_entries = []
+        residual_values = []
+
+        for origin in range(n_origin):
+            for dev in range(n_dev):
+                if origin + dev >= n_origin:
+                    continue  # Outside observed triangle
+
+                value = standardized_residuals[origin, dev]
+                if fitted[origin, dev] <= 0 or not np.isfinite(value) or value == 0:
+                    continue
+
+                residual_entries.append({
+                    'origin': origin,
+                    'dev': dev,
+                    'standardized_residual': value
+                })
+                residual_values.append(value)
+
+        if not residual_entries:
+            self.residual_pool = []
+            self._residual_adjusted_values = np.array([])
+            return
+
+        residual_values = np.array(residual_values)
+        mean_adjusted = float(np.mean(residual_values)) if residual_values.size else 0.0
+
+        adjusted_values = []
+        for entry in residual_entries:
+            adjusted = entry['standardized_residual'] - mean_adjusted
+            entry['adjusted_residual'] = adjusted
+            adjusted_values.append(adjusted)
+
+        self.residual_pool = residual_entries
+        self._residual_adjusted_values = np.array(adjusted_values)
+
+    def _get_residuals(self):
+        """Return unscaled Pearson residuals for display."""
+        return getattr(self, 'unscaled_residuals', None)
+
+    def _find_residual_match(self, residual_value: float):
+        """Find index and entry in residual pool matching residual_value."""
+        if not self.residual_pool or self._residual_adjusted_values.size == 0:
+            return None, None
+
+        diffs = np.abs(self._residual_adjusted_values - residual_value)
+        match_idx = int(np.argmin(diffs))
+        match_entry = self.residual_pool[match_idx]
+        # Provide graceful handling when difference is significantly large
+        if not np.isfinite(diffs[match_idx]):
+            return None, None
+        return match_idx, match_entry
 
     def run_bootstrap(self, n_iterations: int = 1000) -> Dict:
         """
@@ -138,14 +197,27 @@ class AnimatedBootstrapODP:
             for ii in range(n_origin):
                 for jj in range(n_dev):
                     if ii + jj < n_origin:
+                        fitted_value = self.fitted_incremental.values[0, 0, ii, jj]
+                        bootstrap_value = boot_incr[ii, jj]
+
+                        if fitted_value > 0:
+                            sampled_residual = (bootstrap_value - fitted_value) / np.sqrt(
+                                np.abs(fitted_value)
+                            )
+                        else:
+                            sampled_residual = 0.0
+
+                        match_idx, match_entry = self._find_residual_match(sampled_residual)
+
                         sampling_details.append({
                             'origin': ii,
                             'dev': jj,
-                            'fitted': self.fitted_incremental.values[0, 0, ii, jj],
-                            'bootstrap_value': boot_incr[ii, jj],
-                            'sampled_from_origin': 0,  # Placeholder
-                            'sampled_from_dev': 0,  # Placeholder
-                            'sampled_residual': 0.0,  # Placeholder
+                            'fitted': fitted_value,
+                            'bootstrap_value': bootstrap_value,
+                            'sampled_from_origin': match_entry['origin'] if match_entry else None,
+                            'sampled_from_dev': match_entry['dev'] if match_entry else None,
+                            'sampled_residual': sampled_residual,
+                            'sampled_residual_index': match_idx,
                             'sequence': len(sampling_details)
                         })
 

@@ -254,12 +254,16 @@ def register_callbacks(app, bootstrap_engine, visualizer):
             # Highlight sampled residual in pool
             current_sample = iteration_detail['sampling_details'][current_frame]
             # Find the index in residual pool
-            residual_idx = None
-            for idx, r in enumerate(bootstrap_engine.residual_pool):
-                if (r['origin'] == current_sample['sampled_from_origin'] and
-                    r['dev'] == current_sample['sampled_from_dev']):
-                    residual_idx = idx
-                    break
+            residual_idx = current_sample.get('sampled_residual_index')
+
+            if residual_idx is None and bootstrap_engine.residual_pool:
+                for idx, r in enumerate(bootstrap_engine.residual_pool):
+                    if (
+                        r.get('origin') == current_sample.get('sampled_from_origin') and
+                        r.get('dev') == current_sample.get('sampled_from_dev')
+                    ):
+                        residual_idx = idx
+                        break
 
             residual_fig = visualizer.create_residual_pool_scatter(
                 bootstrap_engine.residual_pool,
