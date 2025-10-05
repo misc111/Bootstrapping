@@ -1,19 +1,20 @@
 """
 Bootstrap Engine for Shapland ODP Bootstrap Methodology
-Implements the Over-Dispersed Poisson bootstrap with detailed tracking
-for animation purposes.
+Uses chainladder's BootstrapODPSample for correct implementation
 """
 
 import numpy as np
-import pandas as pd
 import chainladder as cl
-from typing import Dict, List, Tuple, Optional
+from chainladder import BootstrapODPSample
+from typing import Dict, Optional
 
 
 class AnimatedBootstrapODP:
     """
-    Custom wrapper around chainladder's BootstrapODPSample that exposes
-    intermediate steps for visualization and animation.
+    Wrapper around chainladder's BootstrapODPSample with animation support.
+
+    This class uses the chainladder library's built-in ODP bootstrap implementation
+    and adds tracking/visualization features for animation.
     """
 
     def __init__(self, triangle_data: Optional[cl.Triangle] = None, random_state: int = 42):
@@ -22,15 +23,14 @@ class AnimatedBootstrapODP:
 
         Parameters:
         -----------
-        triangle_data : chainladder.Triangle, optional
-            Loss triangle data. If None, uses sample data.
+        triangle_data : cl.Triangle, optional
+            The loss triangle data. If None, loads the GenIns sample dataset.
         random_state : int
             Random seed for reproducibility
         """
         self.random_state = random_state
-        np.random.seed(random_state)
 
-        # Load data
+        # Load triangle data
         if triangle_data is None:
             self.triangle = cl.load_sample('genins')
         else:
@@ -39,162 +39,57 @@ class AnimatedBootstrapODP:
         # Fit base chain ladder model
         self.base_model = cl.Chainladder().fit(self.triangle)
 
-        # Get LDFs from base model
-        base_ldfs = self.base_model.ldf_.values[0, 0, 0, :]
-
-        # Build fitted cumulative triangle by back-filling using LDFs
-        # Start with the latest diagonal and divide by LDFs to fill in the historical triangle
-        fitted_cumulative = np.zeros_like(self.triangle.values[0, 0])
-        latest_diag = self.triangle.latest_diagonal.values[0, 0, :, 0]
-        n_origin, n_dev = fitted_cumulative.shape
-
-        # Fill the fitted triangle
-        for i in range(n_origin):
-            # Start with the latest diagonal value
-            latest_dev_idx = n_origin - i - 1  # Last observed development period for this origin
-            if latest_dev_idx < n_dev:
-                fitted_cumulative[i, latest_dev_idx] = latest_diag[i]
-
-                # Back-fill by dividing by LDFs
-                for j in range(latest_dev_idx - 1, -1, -1):
-                    if j < len(base_ldfs) and base_ldfs[j] > 0:
-                        fitted_cumulative[i, j] = fitted_cumulative[i, j + 1] / base_ldfs[j]
-                    else:
-                        fitted_cumulative[i, j] = fitted_cumulative[i, j + 1]
-
-        # Convert to incremental
+        # Store incremental triangles for visualization
         self.actual_incremental = self.triangle.cum_to_incr()
-        fitted_incremental = np.diff(fitted_cumulative, axis=1, prepend=0)
+        self.fitted_incremental = self.base_model.full_expectation_.cum_to_incr()
 
-        # Store as Triangle object for consistency
-        fitted_tri = self.triangle.copy()
-        fitted_tri.values = fitted_incremental.reshape(1, 1, *fitted_incremental.shape)
-        self.fitted_incremental = fitted_tri
+        # Slice to match original dimensions
+        n_dev_orig = self.actual_incremental.shape[3]
+        self.fitted_incremental = self.fitted_incremental.iloc[:, :, :, :n_dev_orig]
 
-        # Calculate Pearson residuals
-        self._calculate_residuals()
-
-        # Storage for bootstrap iterations
-        self.bootstrap_samples = []
-        self.reserve_estimates = []
+        # Storage for bootstrap results
         self.iteration_details = []
+        self.reserve_estimates = []
+        self.scale_parameter = None
+        self.residual_pool = []  # For compatibility with visualization
 
-    def _calculate_residuals(self):
-        """Calculate unscaled and adjusted Pearson residuals."""
-        # Get incremental values as arrays
-        actual = self.actual_incremental.values[0, 0]  # Shape: (origin, dev)
-        fitted = self.fitted_incremental.values[0, 0]
+    def _calculate_base_reserve(self) -> float:
+        """Calculate base reserve estimate from chain ladder."""
+        ultimate = self.base_model.ultimate_.values[0, 0, :, -1]
+        latest = self.triangle.latest_diagonal.values[0, 0, :, 0]
+        return np.sum(ultimate - latest)
 
-        # Unscaled Pearson residuals: (actual - fitted) / sqrt(fitted)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            self.unscaled_residuals = (actual - fitted) / np.sqrt(fitted)
-            self.unscaled_residuals = np.nan_to_num(self.unscaled_residuals, nan=0.0, posinf=0.0, neginf=0.0)
+    def get_triangle_metadata(self) -> Dict:
+        """Get metadata about the triangle for visualization."""
+        n_origin = self.triangle.shape[2]
+        n_dev = self.triangle.shape[3]
 
-        # Get non-zero residuals for sampling (exclude structural zeros in lower triangle)
-        self.residual_pool = []
-        n_origin = actual.shape[0]
-        n_dev = actual.shape[1]
-
-        for i in range(n_origin):
-            for j in range(n_dev):
-                # Only include values in upper triangle where we have actual data
-                if i + j < n_origin and fitted[i, j] > 0:
-                    self.residual_pool.append({
-                        'origin': i,
-                        'dev': j,
-                        'residual': self.unscaled_residuals[i, j],
-                        'fitted': fitted[i, j]
-                    })
-
-        # Calculate adjustment factor for degrees of freedom
-        n = len(self.residual_pool)
-        p = n_dev - 1  # Number of development factors estimated
-        self.df = max(n - p, 1)
-
-        # Adjusted residuals
-        adjustment = np.sqrt(n / self.df)
-        for item in self.residual_pool:
-            item['adjusted_residual'] = item['residual'] * adjustment
-
-    def run_single_iteration(self, iteration_num: int) -> Dict:
-        """
-        Run a single bootstrap iteration with detailed tracking.
-
-        Returns:
-        --------
-        Dict containing:
-            - sampled_residuals: List of (origin, dev, sampled_residual_value)
-            - bootstrap_triangle: The generated bootstrap triangle
-            - reserve_estimate: The estimated reserve for this iteration
-        """
-        np.random.seed(self.random_state + iteration_num)
-
-        # Track sampling details
-        sampling_details = []
-
-        # Get array dimensions
-        n_origin = self.actual_incremental.values[0, 0].shape[0]
-        n_dev = self.actual_incremental.values[0, 0].shape[1]
-
-        # Create bootstrap incremental triangle
-        bootstrap_incremental = np.zeros((n_origin, n_dev))
-        fitted = self.fitted_incremental.values[0, 0]
-
-        # Sample residuals and generate bootstrap values for HISTORICAL triangle only
-        for i in range(n_origin):
-            for j in range(n_dev):
-                if i + j < n_origin and fitted[i, j] > 0:
-                    # Sample a residual with replacement
-                    sampled = np.random.choice(len(self.residual_pool))
-                    sampled_residual = self.residual_pool[sampled]['adjusted_residual']
-
-                    # Generate bootstrap value: fitted + residual * sqrt(fitted)
-                    bootstrap_value = fitted[i, j] + sampled_residual * np.sqrt(fitted[i, j])
-                    bootstrap_value = max(0, bootstrap_value)  # Ensure non-negative
-
-                    bootstrap_incremental[i, j] = bootstrap_value
-
-                    # Track this sample
-                    sampling_details.append({
-                        'origin': i,
-                        'dev': j,
-                        'fitted': fitted[i, j],
-                        'sampled_residual': sampled_residual,
-                        'sampled_from_origin': self.residual_pool[sampled]['origin'],
-                        'sampled_from_dev': self.residual_pool[sampled]['dev'],
-                        'bootstrap_value': bootstrap_value,
-                        'sequence': len(sampling_details)
-                    })
-
-        # Convert to cumulative
-        bootstrap_cumulative = np.cumsum(bootstrap_incremental, axis=1)
-
-        # Create chainladder Triangle object from bootstrap historical data
-        bootstrap_tri = self.triangle.copy()
-        bootstrap_tri.values = bootstrap_cumulative.reshape(1, 1, *bootstrap_cumulative.shape)
-
-        # Fit NEW chain ladder model to bootstrap triangle and project to ultimate
-        bootstrap_model = cl.Chainladder().fit(bootstrap_tri)
-        ultimate = bootstrap_model.ultimate_.values[0, 0, :, -1]
-        latest = bootstrap_tri.latest_diagonal.values[0, 0, :, 0]
-        reserve = np.sum(ultimate - latest)
-
-        result = {
-            'iteration': iteration_num,
-            'sampling_details': sampling_details,
-            'bootstrap_incremental': bootstrap_incremental,
-            'bootstrap_cumulative': bootstrap_cumulative,
-            'reserve_estimate': reserve
+        return {
+            'n_origin': n_origin,
+            'n_dev': n_dev,
+            'base_reserve': self._calculate_base_reserve(),
+            'actual_cumulative': self.triangle.values[0, 0],
+            'actual_incremental': self.actual_incremental.values[0, 0],
+            'fitted_incremental': self.fitted_incremental.values[0, 0],
+            'residuals': self._get_residuals(),
+            'origin_labels': [str(x) for x in self.triangle.origin.values],
+            'development_labels': [str(x) for x in self.triangle.development.values]
         }
 
-        self.iteration_details.append(result)
-        self.reserve_estimates.append(reserve)
+    def _get_residuals(self):
+        """Calculate Pearson residuals for display."""
+        actual = self.actual_incremental.values[0, 0]
+        fitted = self.fitted_incremental.values[0, 0]
 
-        return result
+        with np.errstate(divide='ignore', invalid='ignore'):
+            residuals = (actual - fitted) / np.sqrt(fitted)
+            residuals = np.nan_to_num(residuals, nan=0.0, posinf=0.0, neginf=0.0)
+
+        return residuals
 
     def run_bootstrap(self, n_iterations: int = 1000) -> Dict:
         """
-        Run complete bootstrap simulation.
+        Run bootstrap using chainladder's BootstrapODPSample.
 
         Parameters:
         -----------
@@ -203,13 +98,64 @@ class AnimatedBootstrapODP:
 
         Returns:
         --------
-        Dict containing summary statistics and all iteration details
+        Dict containing summary statistics
         """
+        # Use chainladder's bootstrap implementation
+        bootstrap_sample = BootstrapODPSample(
+            n_sims=n_iterations,
+            random_state=self.random_state,
+            hat_adj=False  # Use degrees of freedom adjustment
+        ).fit(self.triangle)
+
+        # Store scale parameter
+        self.scale_parameter = bootstrap_sample.scale_
+
+        # Get resampled triangles
+        resampled_triangles = bootstrap_sample.resampled_triangles_
+
+        # Process each bootstrap sample
         self.iteration_details = []
         self.reserve_estimates = []
 
         for i in range(n_iterations):
-            self.run_single_iteration(i)
+            # Get bootstrap triangle
+            boot_tri = resampled_triangles.iloc[i]
+
+            # Fit chain ladder and calculate reserve
+            boot_model = cl.Chainladder().fit(boot_tri)
+            ultimate = boot_model.ultimate_.values[0, 0, :, -1].sum()
+            latest = boot_tri.latest_diagonal.values[0, 0, :, 0].sum()
+            reserve = ultimate - latest
+
+            self.reserve_estimates.append(reserve)
+
+            # Store iteration details for animation
+            boot_incr = boot_tri.cum_to_incr().values[0, 0]
+            n_origin, n_dev = boot_incr.shape
+
+            # Create sampling details (simplified - just show bootstrap values)
+            sampling_details = []
+            for ii in range(n_origin):
+                for jj in range(n_dev):
+                    if ii + jj < n_origin:
+                        sampling_details.append({
+                            'origin': ii,
+                            'dev': jj,
+                            'fitted': self.fitted_incremental.values[0, 0, ii, jj],
+                            'bootstrap_value': boot_incr[ii, jj],
+                            'sampled_from_origin': 0,  # Placeholder
+                            'sampled_from_dev': 0,  # Placeholder
+                            'sampled_residual': 0.0,  # Placeholder
+                            'sequence': len(sampling_details)
+                        })
+
+            self.iteration_details.append({
+                'iteration': i,
+                'bootstrap_incremental': boot_incr,
+                'bootstrap_cumulative': boot_tri.values[0, 0],
+                'reserve_estimate': reserve,
+                'sampling_details': sampling_details
+            })
 
         reserves = np.array(self.reserve_estimates)
 
@@ -218,35 +164,24 @@ class AnimatedBootstrapODP:
             'reserve_estimates': reserves,
             'mean': np.mean(reserves),
             'std': np.std(reserves),
+            'min': np.min(reserves),
+            'max': np.max(reserves),
             'percentiles': {
                 '5': np.percentile(reserves, 5),
                 '25': np.percentile(reserves, 25),
                 '50': np.percentile(reserves, 50),
                 '75': np.percentile(reserves, 75),
                 '95': np.percentile(reserves, 95)
-            },
-            'iteration_details': self.iteration_details
+            }
         }
 
-    def get_triangle_metadata(self) -> Dict:
-        """Get metadata about the triangle for visualization setup."""
-        n_origin = self.actual_incremental.values[0, 0].shape[0]
-        n_dev = self.actual_incremental.values[0, 0].shape[1]
-
-        return {
-            'n_origin': n_origin,
-            'n_dev': n_dev,
-            'origin_labels': list(self.triangle.origin.astype(str)),
-            'development_labels': list(self.triangle.development.astype(str)),
-            'actual_incremental': self.actual_incremental.values[0, 0],
-            'fitted_incremental': self.fitted_incremental.values[0, 0],
-            'residuals': self.unscaled_residuals,
-            'residual_pool': self.residual_pool,
-            'base_reserve': self._calculate_base_reserve()
-        }
-
-    def _calculate_base_reserve(self) -> float:
-        """Calculate base reserve estimate from chain ladder."""
-        ultimate = self.base_model.ultimate_.values[0, 0, :, -1]
-        latest = self.triangle.latest_diagonal.values[0, 0, :, 0]
-        return np.sum(ultimate - latest)
+    def run_single_iteration(self, iteration_num: int):
+        """
+        Run a single bootstrap iteration.
+        This is a simplified version that just runs the full bootstrap.
+        For real-time animation, call run_bootstrap with n_iterations=1.
+        """
+        if len(self.iteration_details) <= iteration_num:
+            # Need to run more iterations
+            needed = iteration_num + 1 - len(self.iteration_details)
+            self.run_bootstrap(needed)
